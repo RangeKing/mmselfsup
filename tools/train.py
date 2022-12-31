@@ -8,6 +8,7 @@ import warnings
 
 import mmcv
 import torch
+import torch.distributed as dist
 from mmcv import Config, DictAction
 from mmcv.runner import get_dist_info, init_dist
 
@@ -21,14 +22,25 @@ from mmselfsup.utils import collect_env, get_root_logger, setup_multi_processes
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a model')
     parser.add_argument('config', help='train config file path')
-    parser.add_argument('--work_dir', help='the dir to save logs and models')
     parser.add_argument(
-        '--resume_from', help='the checkpoint file to resume from')
+        '--work_dir',
+        help='(Deprecated, please use --work-dir) the dir to save logs and '
+        'models')
+    parser.add_argument('--work-dir', help='the dir to save logs and models')
+    parser.add_argument(
+        '--resume_from',
+        help='(Deprecated, please use --resume-from) the checkpoint file '
+        'to resume from')
+    parser.add_argument(
+        '--resume-from', help='the checkpoint file to resume from')
+    parser.add_argument(
+        '--auto-resume',
+        action='store_true',
+        help='resume from the latest checkpoint automatically')
     group_gpus = parser.add_mutually_exclusive_group()
     group_gpus.add_argument(
         '--gpus',
         type=int,
-        default=1,
         help='(Deprecated, please use --gpu-id) number of gpus to use '
         '(only applicable to non-distributed training)')
     group_gpus.add_argument(
@@ -44,6 +56,10 @@ def parse_args():
         help='id of gpu to use '
         '(only applicable to non-distributed training)')
     parser.add_argument('--seed', type=int, default=None, help='random seed')
+    parser.add_argument(
+        '--diff-seed',
+        action='store_true',
+        help='Whether or not set different seeds for different ranks')
     parser.add_argument(
         '--deterministic',
         action='store_true',
@@ -95,6 +111,7 @@ def main():
                                 osp.splitext(osp.basename(args.config))[0])
     if args.resume_from is not None:
         cfg.resume_from = args.resume_from
+    cfg.auto_resume = args.auto_resume
     if args.gpus is not None:
         cfg.gpu_ids = range(1)
         warnings.warn('`--gpus` is deprecated because we only support '
@@ -113,8 +130,8 @@ def main():
     if args.launcher == 'none':
         distributed = False
         assert cfg.model.type not in [
-            'DeepCluster', 'MoCo', 'SimCLR', 'ODC', 'NPID', 'SimSiam',
-            'DenseCL', 'BYOL'
+            'BYOL', 'DeepCluster', 'DenseCL', 'InterCLRMoCo', 'MoCo', 'NPID',
+            'ODC', 'SimCLR', 'SimSiam'
         ], f'{cfg.model.type} does not support non-dist training.'
     else:
         distributed = True
@@ -125,6 +142,9 @@ def main():
 
     # create work_dir
     mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
+
+    # dump config
+    cfg.dump(osp.join(cfg.work_dir, osp.basename(args.config)))
 
     # init the logger before other steps
     timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
@@ -148,6 +168,7 @@ def main():
 
     # set random seeds
     seed = init_random_seed(args.seed)
+    seed = seed + dist.get_rank() if args.diff_seed else seed
     logger.info(f'Set random seed to {seed}, '
                 f'deterministic: {args.deterministic}')
     set_random_seed(seed, deterministic=args.deterministic)

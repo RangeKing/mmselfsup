@@ -11,7 +11,9 @@ Welcome to MMSelfSup's documentation!
    :caption: Get Started
 
    install.md
-   getting_started.md
+   prepare_data.md
+   get_started.md
+   model_zoo.md
 
 .. toctree::
    :maxdepth: 1
@@ -40,14 +42,19 @@ Welcome to MMSelfSup's documentation!
    algorithms/simclr.md
    algorithms/ss.md
    algorithms/swav.md
+   algorithms/mocov3.md
+   algorithms/mae.md
+   algorithms/simmim.md
+   algorithms/barlowtwins.md
+   algorithms/cae.md
 
 
 .. toctree::
    :maxdepth: 1
    :caption: Notes
 
-   community/CONTRIBUTING.md
    changelog.md
+   compatibility.md
 
 .. toctree::
    :caption: Switch Language

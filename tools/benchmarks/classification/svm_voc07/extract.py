@@ -13,7 +13,7 @@ from mmcv.runner import get_dist_info, init_dist, load_checkpoint
 
 from mmselfsup.datasets import build_dataloader, build_dataset
 from mmselfsup.models import build_algorithm
-from mmselfsup.models.utils import ExtractProcess
+from mmselfsup.models.utils import MultiExtractProcess
 from mmselfsup.utils import get_root_logger
 
 
@@ -96,9 +96,23 @@ def main():
     # build the dataloader
     dataset_cfg = mmcv.Config.fromfile(args.dataset_config)
     dataset = build_dataset(dataset_cfg.data.extract)
+    if 'imgs_per_gpu' in cfg.data:
+        logger.warning('"imgs_per_gpu" is deprecated. '
+                       'Please use "samples_per_gpu" instead')
+        if 'samples_per_gpu' in cfg.data:
+            logger.warning(
+                f'Got "imgs_per_gpu"={cfg.data.imgs_per_gpu} and '
+                f'"samples_per_gpu"={cfg.data.samples_per_gpu}, "imgs_per_gpu"'
+                f'={cfg.data.imgs_per_gpu} is used in this experiments')
+        else:
+            logger.warning(
+                'Automatically set "samples_per_gpu"="imgs_per_gpu"='
+                f'{cfg.data.imgs_per_gpu} in this experiments')
+        cfg.data.samples_per_gpu = cfg.data.imgs_per_gpu
+
     data_loader = build_dataloader(
         dataset,
-        imgs_per_gpu=dataset_cfg.data.imgs_per_gpu,
+        samples_per_gpu=dataset_cfg.data.samples_per_gpu,
         workers_per_gpu=dataset_cfg.data.workers_per_gpu,
         dist=distributed,
         shuffle=False)
@@ -108,10 +122,12 @@ def main():
     model.init_weights()
 
     # model is determined in this priority: init_cfg > checkpoint > random
-    if getattr(cfg.model.backbone.init_cfg, 'type', None) == 'Pretrained':
-        logger.info(
-            f'Use pretrained model: '
-            f'{cfg.model.backbone.init_cfg.checkpoint} to extract features')
+    if hasattr(cfg.model.backbone, 'init_cfg'):
+        if getattr(cfg.model.backbone.init_cfg, 'type', None) == 'Pretrained':
+            logger.info(
+                f'Use pretrained model: '
+                f'{cfg.model.backbone.init_cfg.checkpoint} to extract features'
+            )
     elif args.checkpoint is not None:
         logger.info(f'Use checkpoint: {args.checkpoint} to extract features')
         load_checkpoint(model, args.checkpoint, map_location='cpu')
@@ -127,19 +143,19 @@ def main():
             broadcast_buffers=False)
 
     # build extraction processor
-    extractor = ExtractProcess(
+    extractor = MultiExtractProcess(
         pool_type='specified', backbone='resnet50', layer_indices=layer_ind)
 
     # run
     outputs = extractor.extract(model, data_loader, distributed=distributed)
     rank, _ = get_dist_info()
-    mmcv.mkdir_or_exist(f'{args.work_dir}/features/')
+    mmcv.mkdir_or_exist(f'{cfg.work_dir}/features/')
     if rank == 0:
         for key, val in outputs.items():
             split_num = len(dataset_cfg.split_name)
             split_at = dataset_cfg.split_at
             for ss in range(split_num):
-                output_file = f'{args.work_dir}/features/' \
+                output_file = f'{cfg.work_dir}/features/' \
                               f'{dataset_cfg.split_name[ss]}_{key}.npy'
                 if ss == 0:
                     np.save(output_file, val[:split_at[0]])

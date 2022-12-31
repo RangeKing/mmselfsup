@@ -12,7 +12,8 @@ from mmcv.utils import build_from_cfg
 from mmselfsup.core import (DistOptimizerHook, GradAccumFp16OptimizerHook,
                             build_optimizer)
 from mmselfsup.datasets import build_dataloader, build_dataset
-from mmselfsup.utils import get_root_logger, multi_gpu_test, single_gpu_test
+from mmselfsup.utils import (find_latest_checkpoint, get_root_logger,
+                             multi_gpu_test, single_gpu_test)
 
 
 def init_random_seed(seed=None, device='cuda'):
@@ -75,22 +76,44 @@ def train_model(model,
 
     # prepare data loaders
     dataset = dataset if isinstance(dataset, (list, tuple)) else [dataset]
+    if 'imgs_per_gpu' in cfg.data:
+        logger.warning('"imgs_per_gpu" is deprecated. '
+                       'Please use "samples_per_gpu" instead')
+        if 'samples_per_gpu' in cfg.data:
+            logger.warning(
+                f'Got "imgs_per_gpu"={cfg.data.imgs_per_gpu} and '
+                f'"samples_per_gpu"={cfg.data.samples_per_gpu}, "imgs_per_gpu"'
+                f'={cfg.data.imgs_per_gpu} is used in this experiments')
+        else:
+            logger.warning(
+                'Automatically set "samples_per_gpu"="imgs_per_gpu"='
+                f'{cfg.data.imgs_per_gpu} in this experiments')
+        cfg.data.samples_per_gpu = cfg.data.imgs_per_gpu
 
-    data_loaders = [
-        build_dataloader(
-            ds,
-            cfg.data.imgs_per_gpu,
-            cfg.data.workers_per_gpu,
-            # cfg.gpus will be ignored if distributed
-            num_gpus=len(cfg.gpu_ids),
-            dist=distributed,
-            replace=getattr(cfg.data, 'sampling_replace', False),
-            seed=cfg.seed,
-            drop_last=getattr(cfg.data, 'drop_last', False),
-            prefetch=cfg.prefetch,
-            persistent_workers=cfg.persistent_workers,
-            img_norm_cfg=cfg.img_norm_cfg) for ds in dataset
-    ]
+    # The default loader config
+    loader_cfg = dict(
+        # cfg.gpus will be ignored if distributed
+        num_gpus=len(cfg.gpu_ids),
+        dist=distributed,
+        replace=getattr(cfg.data, 'replace', False),
+        drop_last=getattr(cfg.data, 'drop_last', False),
+        prefetch=getattr(cfg, 'prefetch', False),
+        seed=cfg.get('seed'),
+        persistent_workers=cfg.persistent_workers,
+        img_norm_cfg=cfg.img_norm_cfg)
+
+    # The overall dataloader settings
+    loader_cfg.update({
+        k: v
+        for k, v in cfg.data.items() if k not in [
+            'train', 'val', 'test', 'train_dataloader', 'val_dataloader',
+            'test_dataloader'
+        ]
+    })
+    # The specific train dataloader settings
+    train_loader_cfg = {**loader_cfg, **cfg.data.get('train_dataloader', {})}
+
+    data_loaders = [build_dataloader(ds, **train_loader_cfg) for ds in dataset]
 
     # put model on gpus
     if distributed:
@@ -135,7 +158,7 @@ def train_model(model,
     # register hooks
     runner.register_training_hooks(cfg.lr_config, optimizer_config,
                                    cfg.checkpoint_config, cfg.log_config)
-    if distributed:
+    if distributed and cfg.runner.type == 'EpochBasedRunner':
         runner.register_hook(DistSamplerSeedHook())
 
     # register custom hooks
@@ -147,10 +170,11 @@ def train_model(model,
             assert isinstance(hook_cfg, dict), \
                 'Each item in custom_hooks expects dict type, but got ' \
                 f'{type(hook_cfg)}'
-            if hook_cfg.type == 'DeepClusterHook':
+            if hook_cfg.get('type',
+                            None) in ['DeepClusterHook', 'InterCLRHook']:
                 common_params = dict(dist_mode=True, data_loaders=data_loaders)
             else:
-                common_params = dict(dist_mode=True)
+                common_params = dict()
             hook_cfg = hook_cfg.copy()
             priority = hook_cfg.pop('priority', 'NORMAL')
             hook = build_from_cfg(hook_cfg, HOOKS, common_params)
@@ -159,15 +183,16 @@ def train_model(model,
     # register evaluation hook
     if cfg.get('evaluation', None):
         val_dataset = build_dataset(cfg.data.val)
-        val_dataloader = build_dataloader(
-            val_dataset,
-            imgs_per_gpu=cfg.data.imgs_per_gpu,
-            workers_per_gpu=cfg.data.workers_per_gpu,
-            dist=distributed,
-            shuffle=False,
-            prefetch=cfg.data.val.prefetch,
-            drop_last=getattr(cfg.data, 'drop_last', False),
-            img_norm_cfg=cfg.get('img_norm_cfg', dict()))
+
+        # The specific validation dataloader settings
+        val_loader_cfg = {
+            **loader_cfg,
+            'shuffle': False,  # Not shuffle by default
+            'drop_last': False,
+            **cfg.data.get('val_dataloader', {}),
+        }
+        val_dataloader = build_dataloader(val_dataset, **val_loader_cfg)
+
         eval_cfg = cfg.get('evaluation', {})
         eval_cfg['by_epoch'] = cfg.runner['type'] != 'IterBasedRunner'
         eval_hook = DistEvalHook if distributed else EvalHook
@@ -178,6 +203,12 @@ def train_model(model,
         runner.register_hook(
             eval_hook(val_dataloader, test_fn=eval_fn, **eval_cfg),
             priority='LOW')
+
+    resume_from = None
+    if cfg.resume_from is None and cfg.get('auto_resume'):
+        resume_from = find_latest_checkpoint(cfg.work_dir)
+    if resume_from is not None:
+        cfg.resume_from = resume_from
 
     if cfg.resume_from:
         runner.resume(cfg.resume_from)

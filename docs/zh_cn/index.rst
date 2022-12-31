@@ -3,17 +3,17 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to MMSelfSup's documentation!
+欢迎来到 MMSelfSup 的中文文档!
 =====================================
-
-中文文档在持续翻译中，敬请期待，同时我们也鼓励社区开发者们参与到翻译中来
 
 .. toctree::
    :maxdepth: 1
    :caption: 开始你的第一步
 
    install.md
-   getting_started.md
+   prepare_data.md
+   get_started.md
+   model_zoo.md
 
 .. toctree::
    :maxdepth: 1
@@ -42,14 +42,20 @@ Welcome to MMSelfSup's documentation!
    algorithms/simclr.md
    algorithms/ss.md
    algorithms/swav.md
+   algorithms/mocov3.md
+   algorithms/mae.md
+   algorithms/simmim.md
+   algorithms/barlowtwins.md
+   algorithms/cae.md
 
 
 .. toctree::
    :maxdepth: 1
    :caption: 说明
 
-   community/CONTRIBUTING.md
    changelog.md
+   compatibility.md
+
 
 .. toctree::
    :caption: 语言切换

@@ -178,9 +178,16 @@ class PrefetchLoader:
 
         for next_input_dict in self.loader:
             with torch.cuda.stream(stream):
-                data = next_input_dict['img'].cuda(non_blocking=True)
-                next_input_dict['img'] = data.float().sub_(self.mean).div_(
-                    self.std)
+                if isinstance(next_input_dict['img'], list):
+                    next_input_dict['img'] = [
+                        data.cuda(non_blocking=True).float().sub_(
+                            self.mean).div_(self.std)
+                        for data in next_input_dict['img']
+                    ]
+                else:
+                    data = next_input_dict['img'].cuda(non_blocking=True)
+                    next_input_dict['img'] = data.float().sub_(self.mean).div_(
+                        self.std)
 
             if not first:
                 yield input_dict  # noqa F821
@@ -190,6 +197,8 @@ class PrefetchLoader:
             torch.cuda.current_stream().wait_stream(stream)
             input_dict = next_input_dict
 
+        next_input_dict = None
+        torch.cuda.empty_cache()
         yield input_dict
 
     def __len__(self):
